@@ -50,7 +50,20 @@ def propagate(offsets, i, j, delta_i, delta_j, a, b, x, y):
     if D_using_neighbor_offset < offsets[i, j, 2]:
         offsets[i, j, :] = neighbor_offset_y, neighbor_offset_x, D_using_neighbor_offset
 
+def random_search(offsets, i, j, b_offsets_size, search_windows, x, y):
+    min_offset = -np.array([i, j])
+    max_offset = min_offset + b_offsets_size
+    for window_radius in search_windows:
+        min_window = np.maximum(min_offset, offsets[i, j, :2] - window_radius)
+        max_window = np.minimum(max_offset, offsets[i, j, :2] + window_radius)
+        try_offset_y = np.random.randint(min_window[0], max_window[0])
+        try_offset_x = np.random.randint(min_window[1], max_window[1])
+        try_D = calculate_D(a, b, x, y, try_offset_x, try_offset_y)
+        if try_D < offsets[i, j, 2]:
+            offsets[i, j, :] = try_offset_y, try_offset_x, try_D
+
 def patchmatch(a, b, iteration_callback=None):
+    patchmatch_iterations = 6
     offsets = init_offsets_and_best_D(a.shape, b.shape)
     b_offsets_size = np.array(b.shape[:2])-(patch_size-1)
     height, width = offsets.shape[:2]
@@ -62,7 +75,8 @@ def patchmatch(a, b, iteration_callback=None):
 
     assign_initial_D(a, b, offsets)
 
-    for patchmatch_iteration in range(6):
+    for patchmatch_iteration in range(int(patchmatch_iterations/2)):
+        # Right-down iteration
         for i in range(height):
             y = i + patch_radius
             for j in range(width):
@@ -73,20 +87,25 @@ def patchmatch(a, b, iteration_callback=None):
                 if i > 0:
                     propagate(offsets, i, j, -1, 0, a, b, x, y)
                 # Random search
-                min_offset = -np.array([i,j])
-                max_offset = min_offset + b_offsets_size
-                for window_radius in search_windows:
-                    min_window = np.maximum(min_offset, offsets[i,j,:2] - window_radius)
-                    max_window = np.minimum(max_offset, offsets[i,j,:2] + window_radius)
-                    try_offset_y = np.random.randint(min_window[0], max_window[0])
-                    try_offset_x = np.random.randint(min_window[1], max_window[1])
-                    try_D = calculate_D(a, b, x, y, try_offset_x, try_offset_y)
-                    if try_D < offsets[i,j,2]:
-                        offsets[i, j, :] = try_offset_y, try_offset_x, try_D
+                random_search(offsets, i, j, b_offsets_size, search_windows, x, y)
             if i % 50 == 0:
                 if iteration_callback is not None:
                     iteration_callback(patchmatch_iteration, offsets, a, b)
-
+        # Left-up iteration
+        for i in range(height-1,-1,-1):
+            y = i + patch_radius
+            for j in range(width-1,-1,-1):
+                x = j + patch_radius
+                # Propagation
+                if j < width-1:
+                    propagate(offsets, i, j, 0, 1, a, b, x, y)
+                if i < height-1:
+                    propagate(offsets, i, j, 1, 0, a, b, x, y)
+                # Random search
+                random_search(offsets, i, j, b_offsets_size, search_windows, x, y)
+            if i % 50 == 0:
+                if iteration_callback is not None:
+                    iteration_callback(patchmatch_iteration, offsets, a, b)
         if iteration_callback is not None:
             iteration_callback(patchmatch_iteration, offsets, a, b)
 
