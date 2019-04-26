@@ -11,7 +11,7 @@ def iteration_callback(iteration, scanline, offsets, a, b, patch_radius):
 num_pyramid_levels = 6#6
 a_w, a_h = 400, 400
 a = np.zeros((int(a_h * 0.5 ** (num_pyramid_levels-1)), int(a_w * 0.5 ** (num_pyramid_levels-1)), 3))
-b_original = load_image("water.jpg")
+b_original = load_image("gears.jpg")
 
 for pyramid_level in range(num_pyramid_levels):
     b = rescale_images(b_original, 0.5 ** (num_pyramid_levels-1-pyramid_level))

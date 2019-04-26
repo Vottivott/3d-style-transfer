@@ -25,31 +25,35 @@ def get_patch(image, x, y, patch_radius): # x,y specifies the pixel position of 
     return image[int(y)-patch_radius : int(y)+patch_radius+1, int(x)-patch_radius : int(x)+patch_radius+1]
     # return image[y-patch_radius : y+patch_radius+1, x-patch_radius : x+patch_radius+1]
 
-def D(patch_a, patch_b):
+def D(patch_a, patch_b, channel_weights):
     diff = patch_a - patch_b
-    return np.sum(diff * diff)
+    if channel_weights is None:
+        return np.sum(diff * diff)
+    else:
+        return np.inner(np.sum(diff * diff, (0,1)), channel_weights)
 
-def calculate_D(a, b, a_x, a_y, offset_x, offset_y, patch_radius):
-    return D(get_patch(a, a_x, a_y, patch_radius), get_patch(b, a_x+offset_x, a_y+offset_y, patch_radius))
 
-def assign_initial_D(a, b, offsets, patch_radius):
+def calculate_D(a, b, a_x, a_y, offset_x, offset_y, patch_radius, channel_weights):
+    return D(get_patch(a, a_x, a_y, patch_radius), get_patch(b, a_x+offset_x, a_y+offset_y, patch_radius), channel_weights)
+
+def assign_initial_D(a, b, offsets, patch_radius, channel_weights):
     height, width = offsets.shape[:2]
     for i in range(height):
         y = i + patch_radius
         for j in range(width):
             x = j + patch_radius
-            offsets[i,j,2] = calculate_D(a, b, x, y, offsets[i,j,1], offsets[i,j,0], patch_radius)
+            offsets[i,j,2] = calculate_D(a, b, x, y, offsets[i,j,1], offsets[i,j,0], patch_radius, channel_weights)
 
-def propagate(offsets, i, j, delta_i, delta_j, a, b, x, y, patch_radius):
+def propagate(offsets, i, j, delta_i, delta_j, a, b, x, y, patch_radius, channel_weights):
     neighbor_offset_y, neighbor_offset_x, neighbor_best_D = offsets[i + delta_i, j + delta_j]
     try:
-        D_using_neighbor_offset = calculate_D(a, b, x, y, neighbor_offset_x, neighbor_offset_y, patch_radius)  # (Can optimize this)
+        D_using_neighbor_offset = calculate_D(a, b, x, y, neighbor_offset_x, neighbor_offset_y, patch_radius, channel_weights)  # (Can optimize this)
     except ValueError:
         return # Patch ends up outside B when using the neighbor's offset, so don't use it
     if D_using_neighbor_offset < offsets[i, j, 2]:
         offsets[i, j, :] = neighbor_offset_y, neighbor_offset_x, D_using_neighbor_offset
 
-def random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius):
+def random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius, channel_weights):
     min_offset = -np.array([i, j])
     max_offset = min_offset + b_offsets_size
     for window_radius in search_windows:
@@ -57,11 +61,11 @@ def random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, pat
         max_window = np.minimum(max_offset, offsets[i, j, :2] + window_radius)
         try_offset_y = np.random.randint(min_window[0], max_window[0])
         try_offset_x = np.random.randint(min_window[1], max_window[1])
-        try_D = calculate_D(a, b, x, y, try_offset_x, try_offset_y, patch_radius)
+        try_D = calculate_D(a, b, x, y, try_offset_x, try_offset_y, patch_radius, channel_weights)
         if try_D < offsets[i, j, 2]:
             offsets[i, j, :] = try_offset_y, try_offset_x, try_D
 
-def patchmatch(a, b, patchmatch_iterations = 6, patch_size = 5, iteration_callback=None, scanline_callback_every_nth=50, offsets=None):
+def patchmatch(a, b, patchmatch_iterations = 6, patch_size = 5, iteration_callback=None, scanline_callback_every_nth=50, offsets=None, channel_weights=None):
     patch_radius = int((patch_size - 1) / 2)
     if offsets is None:
         offsets = init_offsets_and_best_D(a.shape, b.shape, patch_size)
@@ -73,7 +77,7 @@ def patchmatch(a, b, patchmatch_iterations = 6, patch_size = 5, iteration_callba
     print("num_search_windows = " + str(num_search_windows))
     search_windows = (max_search_radius * window_size_ratio ** i for i in range(num_search_windows))
 
-    assign_initial_D(a, b, offsets, patch_radius)
+    assign_initial_D(a, b, offsets, patch_radius, channel_weights)
 
     for patchmatch_iteration in range(int(patchmatch_iterations/2)):
         # Right-down iteration
@@ -83,11 +87,11 @@ def patchmatch(a, b, patchmatch_iterations = 6, patch_size = 5, iteration_callba
                 x = j + patch_radius
                 # Propagation
                 if j > 0:
-                    propagate(offsets, i, j, 0, -1, a, b, x, y, patch_radius)
+                    propagate(offsets, i, j, 0, -1, a, b, x, y, patch_radius, channel_weights)
                 if i > 0:
-                    propagate(offsets, i, j, -1, 0, a, b, x, y, patch_radius)
+                    propagate(offsets, i, j, -1, 0, a, b, x, y, patch_radius, channel_weights)
                 # Random search
-                random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius)
+                random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius, channel_weights)
             if i % scanline_callback_every_nth == 0:
                 if iteration_callback is not None:
                     iteration_callback(patchmatch_iteration, i, offsets, a, b, patch_radius)
@@ -98,11 +102,11 @@ def patchmatch(a, b, patchmatch_iterations = 6, patch_size = 5, iteration_callba
                 x = j + patch_radius
                 # Propagation
                 if j < width-1:
-                    propagate(offsets, i, j, 0, 1, a, b, x, y, patch_radius)
+                    propagate(offsets, i, j, 0, 1, a, b, x, y, patch_radius, channel_weights)
                 if i < height-1:
-                    propagate(offsets, i, j, 1, 0, a, b, x, y, patch_radius)
+                    propagate(offsets, i, j, 1, 0, a, b, x, y, patch_radius, channel_weights)
                 # Random search
-                random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius)
+                random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius, channel_weights)
             if i % scanline_callback_every_nth == 0:
                 if iteration_callback is not None:
                     iteration_callback(patchmatch_iteration, i, offsets, a, b, patch_radius)

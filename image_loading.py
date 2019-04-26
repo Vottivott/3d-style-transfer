@@ -29,14 +29,34 @@ def show_image( image ):
     plt.show()
     plt.pause(0.05)
 
+def load_stylit_images(guidance_influence = 2.0, style = "style", channels = ("fullgi", "dirdif", "indirb"), scale=1.0):
+    prefix = "stylit/source_"
+    suffix = ".png"
+    source = np.concatenate([load_image(prefix + channel + suffix) for channel in (style,) + channels], 2)
+    prefix = "stylit/target_"
+    target = np.concatenate([load_image(prefix + channel + suffix) for channel in channels], 2)
+    output = np.zeros((target.shape[0],target.shape[1],3), dtype="uint8")
+    target = np.concatenate((output, target), 2)
+    channel_weights = np.array([1.0]*3 + [guidance_influence/float(len(channels))]*3*len(channels))
+    if scale != 1.0:
+        source = rescale_images(source, scale)
+        target = rescale_images(target, scale)
+    return source, target, channel_weights
+
 if __name__ == "__main__":
-    img = load_image("gears.jpg")
-    # img = rescale_image(img, 0.1)
-    # images = np.concatenate((img,img),2)
-    img = rescale_images(img, 0.1)
-    print(img)
-    plt.imshow(img[:,:,:3])
-    plt.show()
+    # img = load_image("gears.jpg")
+    # # img = rescale_image(img, 0.1)
+    # # images = np.concatenate((img,img),2)
+    # img = rescale_images(img, 0.1)
+    # print(img)
+    # plt.imshow(img[:,:,:3])
+    # plt.show()
+    source, target, channel_weights = load_stylit_images(scale=0.5)
+    for images in [source, target]:
+        for i in range(int(images.shape[2]/3)):
+            show_image(images[:,:,i*3:(i+1)*3])
+            plt.pause(0.5)
+
 
 
 
