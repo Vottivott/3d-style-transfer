@@ -77,7 +77,7 @@ def patchmatch(a, b, a_mask, b_mask, patchmatch_iterations = 6, patch_size = 5, 
     window_size_ratio = 0.5
     num_search_windows = 1 + int(-np.log(max_search_radius)/np.log(window_size_ratio)) # All possible windows larger than 1 pixel
     print("num_search_windows = " + str(num_search_windows))
-    search_windows = (max_search_radius * window_size_ratio ** i for i in range(num_search_windows))
+    search_windows = [max_search_radius * window_size_ratio ** i for i in range(num_search_windows)]
 
     assign_initial_D(a, b, offsets, patch_radius, channel_weights, a_mask)
 

@@ -11,7 +11,7 @@ def iteration_callback(iteration, scanline, offsets, a, b, patch_radius):
 if __name__ == "__main__":
     source, target, channel_weights = load_stylit_images()
 
-    num_pyramid_levels = 6  # 6
+    num_pyramid_levels = 7  # 6
     a_w, a_h = 400, 400
     a = target
     a_guides_original = np.copy(target[:,:,3:])
@@ -25,8 +25,7 @@ if __name__ == "__main__":
     a[:, :, :3] = reconstruct_image(offsets, a[:, :, :3], b[:, :, :3], patch_size//2) # Initial reconstruction from the randomly initialized nearest-neighbor field
 
     for pyramid_level in range(num_pyramid_levels):
-        b = rescale_images(b_original, smallest_b_size * 2**pyramid_level)
-        for iteration in range(3):
+        for iteration in range(6):
             if patch_size >= min(a_w, a_h, b.shape[0], b.shape[1]):
                 continue
             offsets = patchmatch(a, b, offsets, patchmatch_iterations=4, patch_size=patch_size,
@@ -35,5 +34,8 @@ if __name__ == "__main__":
             print("Finished texture syntesis iteration " + str(iteration))
             show_image(a[:,:,:3])
         rescaled_output = rescale_images(a[:,:,:3], 2.0)
+        save_image(a[:, :, :3], "results/output_level_" + str(pyramid_level) + ".png")
         if pyramid_level < num_pyramid_levels-1:
             a = np.concatenate((rescaled_output, rescale_images(a_guides_original, rescaled_output.shape[:2])), 2)
+            b = rescale_images(b_original, smallest_b_size * 2 ** (pyramid_level+1))
+            offsets = upscaled_offsets(offsets, a, b, patch_size, channel_weights)

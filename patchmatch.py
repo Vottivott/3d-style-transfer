@@ -74,9 +74,13 @@ def init_random_offsets(a, b, patch_size, channel_weights):
     assign_initial_D(a, b, offsets, patch_size//2, channel_weights)
     return offsets
 
-def upscale_offsets(offsets, a, b, patch_size, channel_weights):
-    np.ones(a.shape)
-    np.concatenate()
+def upscaled_offsets(offsets, a, b, patch_size, channel_weights):
+    upsize = np.ones((2,2))
+    new_offsets = 2 * np.stack((np.kron(offsets[:,:,0], upsize),
+                                np.kron(offsets[:,:,1], upsize),
+                                np.zeros(np.array(offsets.shape[:2])*2)), 2)
+    assign_initial_D(a, b, new_offsets, patch_size//2, channel_weights)
+    return new_offsets
 
 def patchmatch(a, b, offsets, patchmatch_iterations = 6, patch_size = 5, iteration_callback=None, scanline_callback_every_nth=50, channel_weights=None):
     patch_radius = patch_size // 2
@@ -85,7 +89,7 @@ def patchmatch(a, b, offsets, patchmatch_iterations = 6, patch_size = 5, iterati
     window_size_ratio = 0.5
     num_search_windows = 1 + int(-np.log(max_search_radius)/np.log(window_size_ratio)) # All possible windows larger than 1 pixel
     print("num_search_windows = " + str(num_search_windows))
-    search_windows = (max_search_radius * window_size_ratio ** i for i in range(num_search_windows))
+    search_windows = [max_search_radius * window_size_ratio ** i for i in range(num_search_windows)]
 
 
     for patchmatch_iteration in range(int(patchmatch_iterations/2)):
@@ -100,7 +104,6 @@ def patchmatch(a, b, offsets, patchmatch_iterations = 6, patch_size = 5, iterati
                 if i > 0:
                     propagate(offsets, i, j, -1, 0, a, b, x, y, patch_radius, channel_weights)
                 # Random search
-                # through debugging, IT SEEMS THAT RANDOM SEARCH HAS NO EFFECT AT ALL right now, something must be wrong
                 random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights)
             if i % scanline_callback_every_nth == 0:
                 if iteration_callback is not None:
