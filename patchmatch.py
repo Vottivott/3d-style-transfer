@@ -1,28 +1,17 @@
 import numpy as np
 
-
-
-def init_offsets(a_size, b_size, patch_size):
-    a_size = np.array(a_size[:2])-(patch_size-1)
-    b_size = np.array(b_size[:2])-(patch_size-1)
-    offsets_y = np.random.randint(b_size[0], size=a_size[:2]) - np.arange(a_size[0]).reshape((a_size[0],1))
-    offsets_x = np.random.randint(b_size[1], size=a_size[:2]) - np.arange(a_size[1]).reshape((1,a_size[1]))
-    offsets = np.stack((offsets_y, offsets_x), 2)
-    #print(offsets[:,:,0]) # y offsets
-    #print(offsets[:,:,1]) # x offsets
-    return offsets
-
 def init_offsets_and_best_D(a_size, b_size, patch_size):
-    a_size = np.array(a_size[:2])-(patch_size-1)
-    b_size = np.array(b_size[:2])-(patch_size-1)
-    offsets_y = np.random.randint(b_size[0], size=a_size[:2]) - np.arange(a_size[0]).reshape((a_size[0],1))
-    offsets_x = np.random.randint(b_size[1], size=a_size[:2]) - np.arange(a_size[1]).reshape((1,a_size[1]))
+    r = patch_size//2
+    offsets_y = r + np.random.randint(b_size[0]-2*r, size=a_size[:2]) - np.arange(a_size[0]).reshape((a_size[0],1))
+    offsets_x = r + np.random.randint(b_size[1]-2*r, size=a_size[:2]) - np.arange(a_size[1]).reshape((1,a_size[1]))
     best_d = np.zeros(a_size[:2])
     offsets_and_best_D = np.stack((offsets_y, offsets_x, best_d), 2)
     return offsets_and_best_D
 
 def get_patch(image, x, y, patch_radius): # x,y specifies the pixel position of a patch center
-    return image[int(y)-patch_radius : int(y)+patch_radius+1, int(x)-patch_radius : int(x)+patch_radius+1]
+    return image[int(y) - patch_radius: int(y) + patch_radius + 1,
+           int(x) - patch_radius: int(x) + patch_radius + 1]
+    # return image[int(y)-patch_radius : int(y)+patch_radius+1, int(x)-patch_radius : int(x)+patch_radius+1]
     # return image[y-patch_radius : y+patch_radius+1, x-patch_radius : x+patch_radius+1]
 
 def D(patch_a, patch_b, channel_weights):
@@ -32,30 +21,45 @@ def D(patch_a, patch_b, channel_weights):
     else:
         return np.inner(np.sum(diff * diff, (0,1)), channel_weights)
 
+def get_correctly_cropped_patches(a, b, a_x, a_y, offset_x, offset_y, patch_radius):
+    if 0 <= a_y - patch_radius and a_y + patch_radius < a.shape[0] and 0 <= a_x - patch_radius and a_x + patch_radius < a.shape[1]:
+        return get_patch(a, a_x, a_y, patch_radius), get_patch(b, a_x+offset_x, a_y+offset_y, patch_radius), patch_radius, patch_radius, patch_radius, patch_radius
+    else:
+        # Handle regions closer to the boundary than patch_radius
+        up_patch_radius = patch_radius - max(patch_radius - a_y, 0)
+        left_patch_radius = patch_radius - max(patch_radius - a_x, 0)
+        down_patch_radius = patch_radius - max(patch_radius + a_y - (a.shape[0] - 1), 0)
+        right_patch_radius = patch_radius - max(patch_radius + a_x - (a.shape[1] - 1), 0)
+        a_patch, b_patch = [
+            image[int(y - up_patch_radius): int(y + down_patch_radius) + 1,
+            int(x - left_patch_radius): int(x + right_patch_radius) + 1] for (image, x, y) in
+            ((a, a_x, a_y), (b, a_x + offset_x, a_y + offset_y))]
+        return a_patch, b_patch, up_patch_radius, left_patch_radius, down_patch_radius, right_patch_radius
 
 def calculate_D(a, b, a_x, a_y, offset_x, offset_y, patch_radius, channel_weights):
-    return D(get_patch(a, a_x, a_y, patch_radius), get_patch(b, a_x+offset_x, a_y+offset_y, patch_radius), channel_weights)
+    a_patch, b_patch, _, _, _, _ = get_correctly_cropped_patches(a, b, a_x, a_y, offset_x, offset_y, patch_radius)
+    return D(a_patch, b_patch, channel_weights)
 
 def assign_initial_D(a, b, offsets, patch_radius, channel_weights):
     height, width = offsets.shape[:2]
     for i in range(height):
-        y = i + patch_radius
+        y = i
         for j in range(width):
-            x = j + patch_radius
+            x = j
             offsets[i,j,2] = calculate_D(a, b, x, y, offsets[i,j,1], offsets[i,j,0], patch_radius, channel_weights)
 
 def propagate(offsets, i, j, delta_i, delta_j, a, b, x, y, patch_radius, channel_weights):
     neighbor_offset_y, neighbor_offset_x, neighbor_best_D = offsets[i + delta_i, j + delta_j]
-    try:
-        D_using_neighbor_offset = calculate_D(a, b, x, y, neighbor_offset_x, neighbor_offset_y, patch_radius, channel_weights)  # (Can optimize this)
-    except ValueError:
+    if y+neighbor_offset_y-patch_radius < 0 or y+neighbor_offset_y+patch_radius >= b.shape[0] \
+        or x+neighbor_offset_x-patch_radius < 0 or x+neighbor_offset_x+patch_radius >= b.shape[1]:
         return # Patch ends up outside B when using the neighbor's offset, so don't use it
+    D_using_neighbor_offset = calculate_D(a, b, x, y, neighbor_offset_x, neighbor_offset_y, patch_radius, channel_weights)  # (Can optimize this)
     if D_using_neighbor_offset < offsets[i, j, 2]:
         offsets[i, j, :] = neighbor_offset_y, neighbor_offset_x, D_using_neighbor_offset
 
-def random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius, channel_weights):
-    min_offset = -np.array([i, j])
-    max_offset = min_offset + b_offsets_size
+def random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights):
+    min_offset = -np.array([i, j]) + patch_radius
+    max_offset = min_offset + np.array(b.shape[:2]) - 2*patch_radius
     for window_radius in search_windows:
         min_window = np.maximum(min_offset, offsets[i, j, :2] - window_radius)
         max_window = np.minimum(max_offset, offsets[i, j, :2] + window_radius)
@@ -65,11 +69,17 @@ def random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, pat
         if try_D < offsets[i, j, 2]:
             offsets[i, j, :] = try_offset_y, try_offset_x, try_D
 
-def patchmatch(a, b, patchmatch_iterations = 6, patch_size = 5, iteration_callback=None, scanline_callback_every_nth=50, offsets=None, channel_weights=None):
-    patch_radius = int((patch_size - 1) / 2)
-    if offsets is None:
-        offsets = init_offsets_and_best_D(a.shape, b.shape, patch_size)
-    b_offsets_size = np.array(b.shape[:2])-(patch_size-1)
+def init_random_offsets(a, b, patch_size, channel_weights):
+    offsets = init_offsets_and_best_D(a.shape, b.shape, patch_size)
+    assign_initial_D(a, b, offsets, patch_size//2, channel_weights)
+    return offsets
+
+def upscale_offsets(offsets, a, b, patch_size, channel_weights):
+    np.ones(a.shape)
+    np.concatenate()
+
+def patchmatch(a, b, offsets, patchmatch_iterations = 6, patch_size = 5, iteration_callback=None, scanline_callback_every_nth=50, channel_weights=None):
+    patch_radius = patch_size // 2
     height, width = offsets.shape[:2]
     max_search_radius = max(height, width)
     window_size_ratio = 0.5
@@ -77,36 +87,36 @@ def patchmatch(a, b, patchmatch_iterations = 6, patch_size = 5, iteration_callba
     print("num_search_windows = " + str(num_search_windows))
     search_windows = (max_search_radius * window_size_ratio ** i for i in range(num_search_windows))
 
-    assign_initial_D(a, b, offsets, patch_radius, channel_weights)
 
     for patchmatch_iteration in range(int(patchmatch_iterations/2)):
         # Right-down iteration
         for i in range(height):
-            y = i + patch_radius
+            y = i
             for j in range(width):
-                x = j + patch_radius
+                x = j
                 # Propagation
                 if j > 0:
                     propagate(offsets, i, j, 0, -1, a, b, x, y, patch_radius, channel_weights)
                 if i > 0:
                     propagate(offsets, i, j, -1, 0, a, b, x, y, patch_radius, channel_weights)
                 # Random search
-                random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius, channel_weights)
+                # through debugging, IT SEEMS THAT RANDOM SEARCH HAS NO EFFECT AT ALL right now, something must be wrong
+                random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights)
             if i % scanline_callback_every_nth == 0:
                 if iteration_callback is not None:
                     iteration_callback(patchmatch_iteration, i, offsets, a, b, patch_radius)
         # Left-up iteration
         for i in range(height-1,-1,-1):
-            y = i + patch_radius
+            y = i
             for j in range(width-1,-1,-1):
-                x = j + patch_radius
+                x = j
                 # Propagation
                 if j < width-1:
                     propagate(offsets, i, j, 0, 1, a, b, x, y, patch_radius, channel_weights)
                 if i < height-1:
                     propagate(offsets, i, j, 1, 0, a, b, x, y, patch_radius, channel_weights)
                 # Random search
-                random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, patch_radius, channel_weights)
+                random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights)
             if i % scanline_callback_every_nth == 0:
                 if iteration_callback is not None:
                     iteration_callback(patchmatch_iteration, i, offsets, a, b, patch_radius)
@@ -120,12 +130,12 @@ def reconstruct_image(offsets, a, b, patch_radius):
     count = np.zeros(a.shape)
     height, width = offsets.shape[:2]
     for i in range(height):
-        y = i + patch_radius
+        y = i
         for j in range(width):
-            x = j + patch_radius
-            patch = get_patch(b, x + offsets[i, j, 1], y + offsets[i, j, 0], patch_radius)
-            reconstruction[y - patch_radius : y + patch_radius + 1, x - patch_radius : x + patch_radius + 1] += patch
-            count[y - patch_radius: y + patch_radius + 1, x - patch_radius: x + patch_radius + 1] += 1
+            x = j
+            _, b_patch, up_patch_radius, left_patch_radius, down_patch_radius, right_patch_radius = get_correctly_cropped_patches(a, b, x, y, offsets[i, j, 1], offsets[i, j, 0], patch_radius)
+            reconstruction[int(y - up_patch_radius): int(y + down_patch_radius) + 1, int(x - left_patch_radius): int(x + right_patch_radius) + 1] += b_patch
+            count[int(y - up_patch_radius): int(y + down_patch_radius) + 1, int(x - left_patch_radius): int(x + right_patch_radius) + 1] += 1
     reconstruction /= count
     return reconstruction.astype("uint8")
 
@@ -144,7 +154,15 @@ if __name__ == "__main__":
     from image_loading import *
     a = load_image("test_a.jpg")
     b = load_image("test_b.jpg")
-    patchmatch(a, b, iteration_callback=iteration_callback)
+    patch_size = 5
+    offsets = init_random_offsets(a, b, patch_size, None)
+    # reconstruction = reconstruct_image(offsets, a[:, :, :3], b[:, :, :3], patch_size // 2)  # Initial reconstruction from the randomly initialized nearest-neighbor field
+    # print(a.shape)
+    # print(reconstruction.shape)
+    # a = np.copy(reconstruction)
+    patchmatch(a, b, offsets, patchmatch_iterations=4, patch_size=patch_size,
+               iteration_callback=iteration_callback, channel_weights=None)
+    # patchmatch(a, b, iteration_callback=iteration_callback)
 
 
 
