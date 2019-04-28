@@ -48,16 +48,33 @@ def assign_initial_D(a, b, offsets, patch_radius, channel_weights):
             x = j
             offsets[i,j,2] = calculate_D(a, b, x, y, offsets[i,j,1], offsets[i,j,0], patch_radius, channel_weights)
 
-def propagate(offsets, i, j, delta_i, delta_j, a, b, x, y, patch_radius, channel_weights):
+def patch_omega(omega, x, y, patch_radius):
+    return np.sum(omega[int(y)-patch_radius:int(y)+patch_radius+1, int(x)-patch_radius:int(x)+patch_radius+1])
+
+def add_to_omega(omega, x, y, patch_radius, addition):
+    omega[int(y)-patch_radius:int(y)+patch_radius+1, int(x)-patch_radius:int(x)+patch_radius+1] += addition
+
+def try_patch(offsets, a, b, x, y, try_offset_x, try_offset_y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size):
+    D_using_try_offset = calculate_D(a, b, x, y, try_offset_x, try_offset_y, patch_radius, channel_weights)  # (Can optimize this)
+
+    curr_occ = patch_omega(omega, x + offsets[y,x,1], y + offsets[y,x,0], patch_radius)/(patch_size*patch_size)/omega_best
+    new_occ = patch_omega(omega, x + try_offset_x, y + try_offset_y, patch_radius)/(patch_size*patch_size)/omega_best
+    if D_using_try_offset + uniformity_weight*new_occ < offsets[y, x, 2] + uniformity_weight*curr_occ:
+        add_to_omega(omega, x + offsets[y,x,1], y + offsets[y,x,0], patch_radius, -1)
+        add_to_omega(omega, x + try_offset_x, y + try_offset_y, patch_radius, +1)
+        offsets[y, x, :] = try_offset_y, try_offset_x, D_using_try_offset
+
+
+def propagate(offsets, i, j, delta_i, delta_j, a, b, x, y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size):
     neighbor_offset_y, neighbor_offset_x, neighbor_best_D = offsets[i + delta_i, j + delta_j]
     if y+neighbor_offset_y-patch_radius < 0 or y+neighbor_offset_y+patch_radius >= b.shape[0] \
         or x+neighbor_offset_x-patch_radius < 0 or x+neighbor_offset_x+patch_radius >= b.shape[1]:
         return # Patch ends up outside B when using the neighbor's offset, so don't use it
-    D_using_neighbor_offset = calculate_D(a, b, x, y, neighbor_offset_x, neighbor_offset_y, patch_radius, channel_weights)  # (Can optimize this)
-    if D_using_neighbor_offset < offsets[i, j, 2]:
-        offsets[i, j, :] = neighbor_offset_y, neighbor_offset_x, D_using_neighbor_offset
 
-def random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights):
+    try_patch(offsets, a, b, x, y, neighbor_offset_x, neighbor_offset_y, patch_radius, channel_weights, omega, omega_best,
+              uniformity_weight, patch_size)
+
+def random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size):
     min_offset = -np.array([i, j]) + patch_radius
     max_offset = min_offset + np.array(b.shape[:2]) - 2*patch_radius
     for window_radius in search_windows:
@@ -65,9 +82,10 @@ def random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, chann
         max_window = np.minimum(max_offset, offsets[i, j, :2] + window_radius)
         try_offset_y = np.random.randint(min_window[0], max_window[0])
         try_offset_x = np.random.randint(min_window[1], max_window[1])
-        try_D = calculate_D(a, b, x, y, try_offset_x, try_offset_y, patch_radius, channel_weights)
-        if try_D < offsets[i, j, 2]:
-            offsets[i, j, :] = try_offset_y, try_offset_x, try_D
+
+        try_patch(offsets, a, b, x, y, try_offset_x, try_offset_y, patch_radius, channel_weights, omega,
+                  omega_best,
+                  uniformity_weight, patch_size)
 
 def init_random_offsets(a, b, patch_size, channel_weights):
     offsets = init_offsets_and_best_D(a.shape, b.shape, patch_size)
@@ -82,6 +100,16 @@ def upscaled_offsets(offsets, a, b, patch_size, channel_weights):
     assign_initial_D(a, b, new_offsets, patch_size//2, channel_weights)
     return new_offsets
 
+
+def init_omega(a, b, offsets, patch_radius):
+    omega = np.zeros((offsets.shape[0], offsets.shape[1]), dtype=int)
+    for i in range(a.shape[0]):
+        for j in range(a.shape[1]):
+            y = i+offsets[i,j,0]
+            x = j+offsets[i,j,1]
+            omega[int(y)-patch_radius:int(y)+patch_radius+1, int(x)-patch_radius:int(x)+patch_radius+1] += 1
+    return omega
+
 def patchmatch(a, b, offsets, patchmatch_iterations = 6, patch_size = 5, iteration_callback=None, scanline_callback_every_nth=50, channel_weights=None):
     patch_radius = patch_size // 2
     height, width = offsets.shape[:2]
@@ -90,7 +118,9 @@ def patchmatch(a, b, offsets, patchmatch_iterations = 6, patch_size = 5, iterati
     num_search_windows = 1 + int(-np.log(max_search_radius)/np.log(window_size_ratio)) # All possible windows larger than 1 pixel
     print("num_search_windows = " + str(num_search_windows))
     search_windows = [max_search_radius * window_size_ratio ** i for i in range(num_search_windows)]
-
+    omega = init_omega(a, b, offsets, patch_radius)
+    omega_best = patch_size*patch_size * a.shape[0]*a.shape[1] / (b.shape[0]*b.shape[1])
+    uniformity_weight = 3500
 
     for patchmatch_iteration in range(int(patchmatch_iterations/2)):
         # Right-down iteration
@@ -100,11 +130,11 @@ def patchmatch(a, b, offsets, patchmatch_iterations = 6, patch_size = 5, iterati
                 x = j
                 # Propagation
                 if j > 0:
-                    propagate(offsets, i, j, 0, -1, a, b, x, y, patch_radius, channel_weights)
+                    propagate(offsets, i, j, 0, -1, a, b, x, y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size)
                 if i > 0:
-                    propagate(offsets, i, j, -1, 0, a, b, x, y, patch_radius, channel_weights)
+                    propagate(offsets, i, j, -1, 0, a, b, x, y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size)
                 # Random search
-                random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights)
+                random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size)
             if i % scanline_callback_every_nth == 0:
                 if iteration_callback is not None:
                     iteration_callback(patchmatch_iteration, i, offsets, a, b, patch_radius)
@@ -115,11 +145,11 @@ def patchmatch(a, b, offsets, patchmatch_iterations = 6, patch_size = 5, iterati
                 x = j
                 # Propagation
                 if j < width-1:
-                    propagate(offsets, i, j, 0, 1, a, b, x, y, patch_radius, channel_weights)
+                    propagate(offsets, i, j, 0, 1, a, b, x, y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size)
                 if i < height-1:
-                    propagate(offsets, i, j, 1, 0, a, b, x, y, patch_radius, channel_weights)
+                    propagate(offsets, i, j, 1, 0, a, b, x, y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size)
                 # Random search
-                random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights)
+                random_search(offsets, i, j, search_windows, a, b, x, y, patch_radius, channel_weights, omega, omega_best, uniformity_weight, patch_size)
             if i % scanline_callback_every_nth == 0:
                 if iteration_callback is not None:
                     iteration_callback(patchmatch_iteration, i, offsets, a, b, patch_radius)

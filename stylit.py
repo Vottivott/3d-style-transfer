@@ -34,7 +34,7 @@ if __name__ == "__main__":
             print("Finished texture syntesis iteration " + str(iteration))
             show_image(a[:,:,:3])
         rescaled_output = rescale_images(a[:,:,:3], 2.0)
-        save_image(a[:, :, :3], "results/output_level_" + str(pyramid_level) + ".png")
+        save_image(a[:, :, :3], "results2/output_level_" + str(pyramid_level) + ".png")
         if pyramid_level < num_pyramid_levels-1:
             a = np.concatenate((rescaled_output, rescale_images(a_guides_original, rescaled_output.shape[:2])), 2)
             b = rescale_images(b_original, smallest_b_size * 2 ** (pyramid_level+1))
