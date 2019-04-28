@@ -18,10 +18,10 @@ def rescale_images(images, scale):
     return np.stack([imresize(images[:,:,i], scale) for i in range(images.shape[2])], 2)
 
 def save_image( npdata, outfilename ) :
-    img = Image.fromarray( np.asarray( np.clip(npdata,0,255), dtype="uint8"), "L" )
-    img.save( outfilename )
-    #outimg = Image.fromarray(ycc_uint8, "RGB")
-    #outimg.save("ycc.tif")
+    # img = Image.fromarray( np.asarray( np.clip(npdata,0,255), dtype="uint8"), "L" )
+    # img.save( outfilename )
+    outimg = Image.fromarray(npdata, "RGB")
+    outimg.save(outfilename)
 
 def show_image( image ):
     plt.ion()
@@ -29,7 +29,7 @@ def show_image( image ):
     plt.show()
     plt.pause(0.05)
 
-def load_stylit_images(guidance_influence = 2.0, style = "style", channels = ("fullgi", "dirdif", "indirb"), scale=1.0):
+def load_stylit_images(guidance_influence = 2.0, style = "style", channels = ("fullgi", "dirdif", "dirspc", "indirb"), scale=1.0):
     prefix = "stylit/source_"
     suffix = ".png"
     source = np.concatenate([load_image(prefix + channel + suffix) for channel in (style,) + channels], 2)
@@ -52,6 +52,7 @@ if __name__ == "__main__":
     # plt.imshow(img[:,:,:3])
     # plt.show()
     source, target, channel_weights = load_stylit_images(scale=0.5)
+    # save_image(source[:,:,:3], "test.png")
     for images in [source, target]:
         for i in range(int(images.shape[2]/3)):
             show_image(images[:,:,i*3:(i+1)*3])

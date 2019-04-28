@@ -26,11 +26,13 @@ def D(patch_a, patch_b, channel_weights):
 def calculate_D(a, b, a_x, a_y, offset_x, offset_y, patch_radius, channel_weights):
     return D(get_patch(a, a_x, a_y, patch_radius), get_patch(b, a_x+offset_x, a_y+offset_y, patch_radius), channel_weights)
 
-def assign_initial_D(a, b, offsets, patch_radius, channel_weights):
+def assign_initial_D(a, b, offsets, patch_radius, channel_weights, a_mask):
     height, width = offsets.shape[:2]
     for i in range(height):
         y = i + patch_radius
         for j in range(width):
+            if a_mask is not None and a_mask[i, j]:
+                continue
             x = j + patch_radius
             offsets[i,j,2] = calculate_D(a, b, x, y, offsets[i,j,1], offsets[i,j,0], patch_radius, channel_weights)
 
@@ -60,10 +62,15 @@ def random_search(offsets, i, j, b_offsets_size, search_windows, a, b, x, y, pat
         if try_D < offsets[i, j, 2]:
             offsets[i, j, :] = try_offset_y, try_offset_x, try_D
 
-def patchmatch(a, b, b_mask, patchmatch_iterations = 6, patch_size = 5, iteration_callback=None, scanline_callback_every_nth=50, offsets=None, channel_weights=None):
+def patchmatch(a, b, a_mask, b_mask, patchmatch_iterations = 6, patch_size = 5, iteration_callback=None, scanline_callback_every_nth=50, offsets=None, channel_weights=None):
     patch_radius = int((patch_size - 1) / 2)
     if offsets is None:
         offsets = init_offsets_and_best_D(a.shape, b.shape, patch_size, b_mask)
+    elif a_mask is not None:
+        original_offsets = offsets
+        offsets = init_offsets_and_best_D(a.shape, b.shape, patch_size, b_mask)
+        indices = np.nonzero(a_mask)
+        offsets[indices] = original_offsets[indices]
     b_offsets_size = np.array(b.shape[:2])-(patch_size-1)
     height, width = offsets.shape[:2]
     max_search_radius = max(height, width)
@@ -72,13 +79,15 @@ def patchmatch(a, b, b_mask, patchmatch_iterations = 6, patch_size = 5, iteratio
     print("num_search_windows = " + str(num_search_windows))
     search_windows = (max_search_radius * window_size_ratio ** i for i in range(num_search_windows))
 
-    assign_initial_D(a, b, offsets, patch_radius, channel_weights)
+    assign_initial_D(a, b, offsets, patch_radius, channel_weights, a_mask)
 
     for patchmatch_iteration in range(int(patchmatch_iterations/2)):
         # Right-down iteration
         for i in range(height):
             y = i + patch_radius
             for j in range(width):
+                if a_mask is not None and a_mask[i,j]:
+                    continue
                 x = j + patch_radius
                 # Propagation
                 if j > 0:
@@ -94,6 +103,8 @@ def patchmatch(a, b, b_mask, patchmatch_iterations = 6, patch_size = 5, iteratio
         for i in range(height-1,-1,-1):
             y = i + patch_radius
             for j in range(width-1,-1,-1):
+                if a_mask is not None and a_mask[i,j]:
+                    continue
                 x = j + patch_radius
                 # Propagation
                 if j < width-1:
